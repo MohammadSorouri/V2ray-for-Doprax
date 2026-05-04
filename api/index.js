@@ -24,17 +24,12 @@ export default async function handler(req) {
   }
 
   try {
-    // ساخت URL مقصد
-    const url = new URL(req.url);
-    const pathAndQuery = url.pathname + url.search;
-    const targetUrl = TARGET_BASE + pathAndQuery;
+    const pathStart = req.url.indexOf("/", 8);
+    const targetUrl =
+      pathStart === -1 ? TARGET_BASE + "/" : TARGET_BASE + req.url.slice(pathStart);
 
-    console.log(`[relay] ${req.method} ${targetUrl}`);
-
-    // آماده‌سازی هدرها
     const out = new Headers();
     let clientIp = null;
-    
     for (const [k, v] of req.headers) {
       if (STRIP_HEADERS.has(k)) continue;
       if (k.startsWith("x-vercel-")) continue;
@@ -48,51 +43,20 @@ export default async function handler(req) {
       }
       out.set(k, v);
     }
-    
-    if (clientIp) {
-      out.set("x-forwarded-for", clientIp);
-    }
+    if (clientIp) out.set("x-forwarded-for", clientIp);
 
     const method = req.method;
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    // تنظیمات fetch بدون SSL
-    const fetchOptions = {
+    return await fetch(targetUrl, {
       method,
       headers: out,
+      body: hasBody ? req.body : undefined,
+      duplex: "half",
       redirect: "manual",
-    };
-
-    // فقط برای متدهایی که body دارن اضافه کن
-    if (hasBody) {
-      fetchOptions.body = req.body;
-      fetchOptions.duplex = "half";
-    }
-
-    // اضافه کردن option برای ignore SSL errors (فقط برای http:// کاربرد نداره
-    // ولی اگه خواستی با https:// و SSL نامعتبر تست کنی میتونی uncomment کنی)
-    // توجه: این option در Edge Runtime وجود نداره
-    // برای https نامعتبر باید از http:// استفاده کنی
-
-    const response = await fetch(targetUrl, fetchOptions);
-
-    // کپی کردن response به صورت کامل
-    const responseHeaders = new Headers(response.headers);
-    
-    // اضافه کردن CORS headers اگر لازم داری
-    responseHeaders.set("Access-Control-Allow-Origin", "*");
-    responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    responseHeaders.set("Access-Control-Allow-Headers", "*");
-
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
     });
-
   } catch (err) {
     console.error("relay error:", err);
-    console.error("Target URL:", TARGET_BASE);
-    return new Response(`Bad Gateway: ${err.message}`, { status: 502 });
+    return new Response("Bad Gateway: Tunnel Failed", { status: 502 });
   }
 }
