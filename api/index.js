@@ -1,5 +1,3 @@
-// حذف: export const config = { runtime: "edge" };
-
 const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
 
 const STRIP_HEADERS = new Set([
@@ -20,7 +18,10 @@ const STRIP_HEADERS = new Set([
 
 export default async function handler(req) {
   if (!TARGET_BASE) {
-    return new Response("Misconfigured: TARGET_DOMAIN is not set", { status: 500 });
+    return new Response("Misconfigured: TARGET_DOMAIN is not set", { 
+      status: 500,
+      headers: { "Content-Type": "text/plain" }
+    });
   }
 
   try {
@@ -28,7 +29,6 @@ export default async function handler(req) {
     const targetUrl =
       pathStart === -1 ? TARGET_BASE + "/" : TARGET_BASE + req.url.slice(pathStart);
 
-    // لاگ کردن URL مقصد برای دیباگ
     console.log(`[DEBUG] Forwarding to: ${targetUrl}`);
     console.log(`[DEBUG] Method: ${req.method}`);
 
@@ -54,7 +54,6 @@ export default async function handler(req) {
     const method = req.method;
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    // تنظیمات اضافی برای fetch
     const fetchOptions = {
       method,
       headers: out,
@@ -68,33 +67,54 @@ export default async function handler(req) {
 
     const response = await fetch(targetUrl, fetchOptions);
 
-    // لاگ کردن نتیجه موفق
     console.log(`[DEBUG] Response status: ${response.status}`);
+    console.log(`[DEBUG] Response content-type: ${response.headers.get("content-type")}`);
+
+    // کپی کردن هدرهای مهم از پاسخ اصلی
+    const responseHeaders = new Headers();
     
-    return response;
+    // کپی همه هدرها به جز هدرهای مشکل‌ساز
+    for (const [key, value] of response.headers) {
+      if (STRIP_HEADERS.has(key)) continue;
+      if (key === "content-encoding") continue; // Vercel خودش مدیریت میکنه
+      responseHeaders.set(key, value);
+    }
+
+    // اضافه کردن هدرهای CORS (حیاتی!)
+    responseHeaders.set("Access-Control-Allow-Origin", "*");
+    responseHeaders.set("Access-Control-Allow-Methods", "*");
+    responseHeaders.set("Access-Control-Allow-Headers", "*");
+
+    // برای درخواست‌های OPTIONS (preflight)
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        status: 200,
+        headers: responseHeaders
+      });
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: responseHeaders
+    });
 
   } catch (err) {
-    // لاگ دقیق‌تر خطا
+    console.error("[ERROR] Full error:", err);
     console.error("[ERROR] Message:", err.message);
     console.error("[ERROR] Cause:", err.cause);
     console.error("[ERROR] Code:", err.code);
-    console.error("[ERROR] Stack:", err.stack);
-    console.error("[ERROR] Target URL:", TARGET_BASE);
     
-    let errorMessage = "Bad Gateway: Tunnel Failed";
+    let errorMessage = `Bad Gateway Error\n\nTarget: ${TARGET_BASE}\nError: ${err.message}`;
     
-    if (err.code === "ENOTFOUND" || err.message.includes("fetch failed")) {
-      errorMessage = "Bad Gateway: Target server unreachable. Check if TARGET_DOMAIN is accessible from Vercel.";
-    } else if (err.message.includes("timeout")) {
-      errorMessage = "Bad Gateway: Connection timed out";
-    } else {
-      errorMessage = `Bad Gateway: ${err.message}`;
+    if (err.cause) {
+      errorMessage += `\nCause: ${err.cause}`;
     }
     
     return new Response(errorMessage, { 
       status: 502,
       headers: {
-        "Content-Type": "text/plain; charset=utf-8"
+        "Content-Type": "text/plain; charset=utf-8",
+        "Access-Control-Allow-Origin": "*"
       }
     });
   }
