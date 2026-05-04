@@ -16,10 +16,6 @@ const STRIP_HEADERS = new Set([
   "x-forwarded-port",
 ]);
 
-const CUSTOM_HEADERS = {
-  "Host": new URL(TARGET_BASE || "http://localhost").hostname,
-};
-
 export default async function handler(req) {
   if (!TARGET_BASE) {
     return new Response("Misconfigured: TARGET_DOMAIN is not set", { 
@@ -38,21 +34,31 @@ export default async function handler(req) {
     const out = new Headers();
     let clientIp = null;
     
-    out.set("Host", CUSTOM_HEADERS.Host);
+    // ست کردن Host header
+    const targetHost = new URL(TARGET_BASE).hostname;
+    out.set("Host", targetHost);
     
-    for (const [k, v] of req.headers) {
-      if (STRIP_HEADERS.has(k)) continue;
-      if (k.startsWith("x-vercel-")) continue;
+    // روش صحیح خوندن هدرها در Vercel Serverless
+    const headers = req.headers;
+    
+    // استفاده از headers.entries() یا headers.forEach()
+    headers.forEach((value, key) => {
+      const k = key.toLowerCase();
+      
+      if (STRIP_HEADERS.has(k)) return;
+      if (k.startsWith("x-vercel-")) return;
+      
       if (k === "x-real-ip") {
-        clientIp = v;
-        continue;
+        clientIp = value;
+        return;
       }
       if (k === "x-forwarded-for") {
-        if (!clientIp) clientIp = v;
-        continue;
+        if (!clientIp) clientIp = value;
+        return;
       }
-      out.set(k, v);
-    }
+      
+      out.set(k, value);
+    });
     
     if (clientIp) out.set("x-forwarded-for", clientIp);
 
@@ -76,12 +82,13 @@ export default async function handler(req) {
 
     const responseHeaders = new Headers();
     
-    for (const [key, value] of response.headers) {
-      if (STRIP_HEADERS.has(key)) continue;
-      if (key === "content-encoding") continue;
+    response.headers.forEach((value, key) => {
+      if (STRIP_HEADERS.has(key.toLowerCase())) return;
+      if (key.toLowerCase() === "content-encoding") return;
       responseHeaders.set(key, value);
-    }
+    });
 
+    // هدرهای CORS
     responseHeaders.set("Access-Control-Allow-Origin", "*");
     responseHeaders.set("Access-Control-Allow-Methods", "*");
     responseHeaders.set("Access-Control-Allow-Headers", "*");
@@ -105,9 +112,10 @@ export default async function handler(req) {
     return new Response(
       `Error: ${err.message}\n\n` +
       `Target: ${TARGET_BASE}\n` +
-      `This usually means SSL/TLS error. Check Cloudflare settings:\n` +
-      `1. SSL/TLS mode should be "Flexible"\n` +
-      `2. TARGET_DOMAIN should be http:// (not https://)`,
+      `Please check:\n` +
+      `1. TARGET_DOMAIN is set correctly (use http://)\n` +
+      `2. Cloudflare SSL/TLS is set to Flexible\n` +
+      `3. Target server is accessible from Vercel`,
       { 
         status: 502,
         headers: {
