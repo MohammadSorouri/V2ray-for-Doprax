@@ -1,9 +1,7 @@
 export const config = { runtime: "edge" };
 
-// حذف اسلش انتهایی دامنه هدف
 const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
 
-// هدرهایی که باید از درخواست حذف شوند
 const STRIP_HEADERS = new Set([
   "host",
   "connection",
@@ -21,60 +19,35 @@ const STRIP_HEADERS = new Set([
 ]);
 
 export default async function handler(req) {
-  // بررسی تنظیم بودن دامنه هدف
   if (!TARGET_BASE) {
     return new Response("Misconfigured: TARGET_DOMAIN is not set", { status: 500 });
   }
 
   try {
-    // ساخت URL مقصد با استفاده از pathname و search پارامترهای درخواست
-    const url = new URL(req.url);
-    const targetUrl = TARGET_BASE + url.pathname + url.search;
+    const pathStart = req.url.indexOf("/", 8);
+    const targetUrl =
+      pathStart === -1 ? TARGET_BASE + "/" : TARGET_BASE + req.url.slice(pathStart);
 
-    // ساخت هدرهای خروجی
     const out = new Headers();
     let clientIp = null;
-    let xForwardedFor = null;
-
-    // پیمایش هدرهای ورودی و فیلتر کردن آنها
-    for (const [key, value] of req.headers) {
-      const lowerKey = key.toLowerCase();
-
-      // حذف هدرهای غیرمجاز
-      if (STRIP_HEADERS.has(lowerKey)) continue;
-      // حذف هدرهای مخصوص Vercel
-      if (lowerKey.startsWith("x-vercel-")) continue;
-
-      // تشخیص آی‌پی کلاینت اصلی
-      if (lowerKey === "x-real-ip") {
-        clientIp = value;
+    for (const [k, v] of req.headers) {
+      if (STRIP_HEADERS.has(k)) continue;
+      if (k.startsWith("x-vercel-")) continue;
+      if (k === "x-real-ip") {
+        clientIp = v;
         continue;
       }
-
-      // ذخیره X-Forwarded-For ورودی (ممکن است شامل چند آی‌پی باشد)
-      if (lowerKey === "x-forwarded-for") {
-        xForwardedFor = value;
+      if (k === "x-forwarded-for") {
+        if (!clientIp) clientIp = v;
         continue;
       }
-
-      out.set(key, value);
+      out.set(k, v);
     }
-
-    // تنظیم صحیح هدر X-Forwarded-For
-    const ipToAdd = clientIp || (xForwardedFor?.split(",")[0]?.trim() || null);
-    if (ipToAdd) {
-      const existing = xForwardedFor || null;
-      const newXFF = existing ? `${existing}, ${ipToAdd}` : ipToAdd;
-      out.set("x-forwarded-for", newXFF);
-    } else if (xForwardedFor) {
-      // اگر آی‌پی جدیدی نداریم ولی هدر ورودی وجود دارد، آن را منتقل می‌کنیم
-      out.set("x-forwarded-for", xForwardedFor);
-    }
+    if (clientIp) out.set("x-forwarded-for", clientIp);
 
     const method = req.method;
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    // ارسال درخواست به سرور مقصد
     return await fetch(targetUrl, {
       method,
       headers: out,
@@ -83,7 +56,7 @@ export default async function handler(req) {
       redirect: "manual",
     });
   } catch (err) {
-    console.error("Relay error:", err);
+    console.error("relay error:", err);
     return new Response("Bad Gateway: Tunnel Failed", { status: 502 });
   }
 }
