@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "name": "athenasorouri",
+  "name": "vercel-xhttp-relay",
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
   ],
