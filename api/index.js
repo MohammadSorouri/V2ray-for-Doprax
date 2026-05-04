@@ -1,4 +1,4 @@
-export const config = { runtime: "edge" };
+// حذف: export const config = { runtime: "edge" };
 
 const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
 
@@ -28,8 +28,13 @@ export default async function handler(req) {
     const targetUrl =
       pathStart === -1 ? TARGET_BASE + "/" : TARGET_BASE + req.url.slice(pathStart);
 
+    // لاگ کردن URL مقصد برای دیباگ
+    console.log(`[DEBUG] Forwarding to: ${targetUrl}`);
+    console.log(`[DEBUG] Method: ${req.method}`);
+
     const out = new Headers();
     let clientIp = null;
+    
     for (const [k, v] of req.headers) {
       if (STRIP_HEADERS.has(k)) continue;
       if (k.startsWith("x-vercel-")) continue;
@@ -43,20 +48,54 @@ export default async function handler(req) {
       }
       out.set(k, v);
     }
+    
     if (clientIp) out.set("x-forwarded-for", clientIp);
 
     const method = req.method;
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    return await fetch(targetUrl, {
+    // تنظیمات اضافی برای fetch
+    const fetchOptions = {
       method,
       headers: out,
-      body: hasBody ? req.body : undefined,
-      duplex: "half",
       redirect: "manual",
-    });
+    };
+
+    if (hasBody && req.body) {
+      fetchOptions.body = req.body;
+      fetchOptions.duplex = "half";
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+
+    // لاگ کردن نتیجه موفق
+    console.log(`[DEBUG] Response status: ${response.status}`);
+    
+    return response;
+
   } catch (err) {
-    console.error("relay error:", err);
-    return new Response("Bad Gateway: Tunnel Failed", { status: 502 });
+    // لاگ دقیق‌تر خطا
+    console.error("[ERROR] Message:", err.message);
+    console.error("[ERROR] Cause:", err.cause);
+    console.error("[ERROR] Code:", err.code);
+    console.error("[ERROR] Stack:", err.stack);
+    console.error("[ERROR] Target URL:", TARGET_BASE);
+    
+    let errorMessage = "Bad Gateway: Tunnel Failed";
+    
+    if (err.code === "ENOTFOUND" || err.message.includes("fetch failed")) {
+      errorMessage = "Bad Gateway: Target server unreachable. Check if TARGET_DOMAIN is accessible from Vercel.";
+    } else if (err.message.includes("timeout")) {
+      errorMessage = "Bad Gateway: Connection timed out";
+    } else {
+      errorMessage = `Bad Gateway: ${err.message}`;
+    }
+    
+    return new Response(errorMessage, { 
+      status: 502,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8"
+      }
+    });
   }
 }
